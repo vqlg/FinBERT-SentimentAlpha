@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Model cache (HuggingFace downloads — large, re-downloadable)
+.cache/
+*.bin
+*.safetensors
+
+# Output files
+dashboard.png
+live_signals.png
+
+# Research papers (reference by arXiv ID instead)
+resources/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
