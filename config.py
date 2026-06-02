@@ -20,14 +20,27 @@ class SignalConfig:
     # (Tetlock 2007; Bollen et al. 2011). Longer for macro regimes (20-60 days).
     decay_halflife: float = 3.0
     ewma_span: int = 5
-    momentum_window: int = 5        # Days for sentiment momentum (trend in sentiment)
+    # Multi-horizon sentiment momentum — 3/7/15-day windows capture short, medium, and
+    # slow regime shifts in sentiment. Weights from Trading-R1 (arXiv:2509.11420).
+    momentum_horizons: List[int] = field(default_factory=lambda: [3, 7, 15])
+    momentum_horizon_weights: List[float] = field(default_factory=lambda: [0.3, 0.5, 0.2])
     zscore_window: int = 60         # Rolling window for time-series z-score
     min_headlines: int = 1
 
+    # RSI and MACD parameters (Wilder RSI + classic MACD).
+    rsi_window: int = 14
+    macd_fast: int = 12
+    macd_slow: int = 26
+    macd_signal_span: int = 9
+
+    # Weights across all five components. Sentiment dominates (60%), technicals add 40%.
+    # Alpha-R1 ablation shows news+price → Sharpe 1.62 vs news-only 1.15 (arXiv:2512.23515).
     signal_weights: Dict[str, float] = field(default_factory=lambda: {
-        "level": 0.40,       # Smoothed absolute sentiment
-        "momentum": 0.40,    # Sentiment trend (captures regime shifts)
-        "surprise": 0.20,    # Deviation from slow MA (mean-reversion component)
+        "level":    0.25,   # Smoothed absolute sentiment level
+        "momentum": 0.25,   # Multi-horizon sentiment momentum
+        "surprise": 0.10,   # Sentiment deviation from slow MA
+        "rsi":      0.25,   # Price RSI (orthogonal to sentiment)
+        "macd":     0.15,   # MACD histogram (trend confirmation)
     })
 
     # Research shows sentiment alpha degrades significantly during high-vol regimes.
@@ -45,6 +58,10 @@ class PortfolioConfig:
     # Tercile split preferred over continuous signal for out-of-sample robustness;
     # continuous sizing overfits to signal magnitude calibration (research consensus).
     tercile_split: bool = True
+    # Slot rotation: divide capital into H sub-portfolios, rebalance 1/H per day.
+    # Reduces daily turnover by 5x with no loss of coverage (Alpha-R1, arXiv:2512.23515).
+    slot_rotation: bool = True
+    holding_period: int = 5
 
 
 @dataclass

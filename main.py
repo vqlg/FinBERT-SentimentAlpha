@@ -1,5 +1,5 @@
 """
-SentimentQuant — NLP-driven quantitative finance model.
+FinBERT-SentimentAlpha — NLP-driven quantitative finance model.
 
 Two modes:
   python main.py live      [--tickers AAPL MSFT ...]
@@ -22,7 +22,9 @@ from rich.table import Table
 
 from config import CFG
 from src.data.news import fetch_all_news
+from src.data.alphavantage_news import fetch_alphavantage_historical_news
 from src.data.prices import fetch_prices, fetch_vix
+from src.data.insider import fetch_insider_sentiment, insider_to_daily_signal
 from src.nlp.sentiment import EnsembleSentimentScorer
 from src.signals.generator import build_signals, aggregate_daily_sentiment
 from src.portfolio.optimizer import signals_to_weights
@@ -48,7 +50,7 @@ def run_live(tickers=None):
     position weights alongside current price and VIX context.
     """
     tickers = tickers or CFG.backtest.tickers
-    console.rule("[bold blue]SentimentQuant — Live Signal Mode")
+    console.rule("[bold blue]FinBERT-SentimentAlpha — Live Signal Mode")
 
     # Need ≥ zscore_window (60) trading days of history for the rolling z-scores.
     # 120 calendar days ≈ 85 trading days — enough warmup with room to spare.
@@ -81,7 +83,7 @@ def run_live(tickers=None):
         console.print("[cyan]Scoring with FinBERT 75% + VADER 25%…")
         scorer_obj = EnsembleSentimentScorer(CFG.nlp)
         scored = scorer_obj.score_dataframe(news_df)
-        real_sent = aggregate_daily_sentiment(scored)
+        real_sent = aggregate_daily_sentiment(scored, decay_halflife=CFG.signal.decay_halflife)
 
         # Real scored sentiment overrides synthetic wherever dates overlap
         blended = synthetic_sent.merge(
@@ -95,16 +97,25 @@ def run_live(tickers=None):
         console.print("[yellow]No news retrieved — using synthetic sentiment proxy.")
         blended = synthetic_sent
 
-    # Full 5-step signal pipeline
+    # Full 5-step signal pipeline (now includes RSI + MACD + multi-horizon momentum)
     console.print(
         "[cyan]Running full pipeline "
-        "(EWMA → level/momentum/surprise → VIX filter → cross-sectional z-score)…"
+        "(EWMA → level/momentum/surprise/RSI/MACD → VIX filter → cross-sectional z-score)…"
     )
     signals = build_signals(blended, prices, vix, CFG.signal)
     weights = signals_to_weights(signals, prices, CFG.portfolio)
 
     # Latest row
     latest_date = signals.index[-1]
+
+    # Insider sentiment (optional — requires FINNHUB_API_KEY env var)
+    console.print("[cyan]Fetching insider sentiment (Finnhub)…")
+    insider_df = fetch_insider_sentiment(active_tickers)
+    insider_daily = insider_to_daily_signal(insider_df, prices.index)
+    latest_mspr = (
+        insider_daily.loc[latest_date] if latest_date in insider_daily.index
+        else pd.Series(dtype=float)
+    ) if not insider_daily.empty else pd.Series(dtype=float)
     latest_signals = signals.loc[latest_date].dropna()
     latest_weights = weights.loc[latest_date]
 
@@ -139,6 +150,7 @@ def run_live(tickers=None):
     table.add_column("Price",     justify="right",  width=9)
     table.add_column("Today",     justify="right",  width=8)
     table.add_column("Headlines", justify="right",  width=11)
+    table.add_column("Insider",   justify="center", width=10)
     table.add_column("Action",    justify="center", width=10)
 
     for rank, (ticker, sig) in enumerate(ranked.items(), 1):
@@ -158,6 +170,16 @@ def run_live(tickers=None):
         else:
             action, w_color = "[yellow]FLAT[/yellow]", "yellow"
 
+        mspr = latest_mspr.get(ticker) if not latest_mspr.empty else None
+        if mspr is None or (isinstance(mspr, float) and np.isnan(mspr)):
+            insider_str = "[grey]—[/grey]"
+        elif mspr > 0.2:
+            insider_str = f"[green]BUY {mspr:+.2f}[/green]"
+        elif mspr < -0.2:
+            insider_str = f"[red]SELL {mspr:+.2f}[/red]"
+        else:
+            insider_str = f"[yellow]{mspr:+.2f}[/yellow]"
+
         table.add_row(
             str(rank), ticker,
             f"{sig:+.3f}",
@@ -165,6 +187,7 @@ def run_live(tickers=None):
             price_str,
             f"[{chg_color}]{chg_str}[/{chg_color}]",
             str(n_hl),
+            insider_str,
             action,
         )
 
@@ -242,11 +265,7 @@ def run_backtest_mode(tickers=None, start=None, end=None):
     start = start or cfg.start_date
     end = end or cfg.end_date
 
-    console.rule("[bold blue]SentimentQuant — Backtest Mode")
-    console.print(
-        "[yellow]Using synthetic sentiment proxy (idiosyncratic returns).\n"
-        "[yellow]For production: replace _synthetic_daily_sentiment() with real news API.\n"
-    )
+    console.rule("[bold blue]FinBERT-SentimentAlpha — Backtest Mode")
 
     console.print(f"[cyan]Fetching price data {start} → {end} for {len(tickers)} tickers…")
     prices, _ = fetch_prices(tickers, start, end)
@@ -256,7 +275,6 @@ def run_backtest_mode(tickers=None, start=None, end=None):
         console.print("[red]Price fetch returned empty DataFrame. Check tickers/dates.")
         sys.exit(1)
 
-    # Remove tickers with insufficient history (< 200 trading days)
     prices = prices.dropna(axis=1, thresh=200)
     active_tickers = prices.columns.tolist()
     if not active_tickers:
@@ -264,11 +282,40 @@ def run_backtest_mode(tickers=None, start=None, end=None):
         sys.exit(1)
     console.print(f"[green]Active tickers after history filter: {active_tickers}")
 
-    # Build synthetic sentiment → signals → weights → backtest
-    console.print("[cyan]Building synthetic daily sentiment…")
-    daily_sentiment = _synthetic_daily_sentiment(prices)
+    # --- Sentiment source: GDELT historical news or synthetic fallback ---
+    console.print(
+        f"[cyan]Fetching Alpha Vantage news for {len(active_tickers)} tickers "
+        f"({start} → {end})…\n"
+        "[dim]Cached quarters load instantly; new quarters take ~13s each.[/dim]"
+    )
+    news_df = fetch_alphavantage_historical_news(active_tickers, start, end)
 
-    console.print("[cyan]Constructing composite signals (level + momentum + surprise)…")
+    if not news_df.empty:
+        console.print(
+            f"[green]{len(news_df):,} headlines retrieved across "
+            f"{news_df['ticker'].nunique()} tickers."
+        )
+        console.print("[cyan]Scoring with FinBERT 75% + VADER 25%…")
+        scorer = EnsembleSentimentScorer(CFG.nlp)
+        scored_bt = scorer.score_dataframe(news_df)
+        daily_sentiment = aggregate_daily_sentiment(
+            scored_bt, decay_halflife=CFG.signal.decay_halflife
+        )
+        console.print(
+            f"[green]Real sentiment ready: "
+            f"{len(daily_sentiment):,} ticker-days scored."
+        )
+    else:
+        console.print(
+            "[yellow]Alpha Vantage returned no articles — falling back to "
+            "synthetic sentiment proxy."
+        )
+        daily_sentiment = _synthetic_daily_sentiment(prices)
+
+    console.print(
+        "[cyan]Constructing composite signals "
+        "(EWMA → level/momentum/surprise/RSI/MACD → VIX filter)…"
+    )
     signals = build_signals(daily_sentiment, prices, vix, CFG.signal)
 
     console.print("[cyan]Sizing positions (tercile long-short, vol-scaled, dollar-neutral)…")
@@ -321,7 +368,7 @@ def run_backtest_mode(tickers=None, start=None, end=None):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="SentimentQuant")
+    parser = argparse.ArgumentParser(description="FinBERT-SentimentAlpha")
     parser.add_argument("mode", choices=["live", "backtest"])
     parser.add_argument("--tickers", nargs="+", default=None)
     parser.add_argument("--start", default=None, help="Backtest start date YYYY-MM-DD")

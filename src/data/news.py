@@ -1,11 +1,14 @@
 import json
 import logging
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+
+import json
+import os
 
 import feedparser
 import pandas as pd
@@ -20,7 +23,8 @@ _HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
     )
 }
-_CACHE_DIR = Path(__file__).parent.parent.parent / ".cache"
+_CACHE_DIR   = Path(__file__).parent.parent.parent / ".cache"
+_FINNHUB_URL = "https://finnhub.io/api/v1"
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +101,37 @@ def _fetch_yahoo_rss(ticker: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _fetch_finnhub_live(ticker: str) -> pd.DataFrame:
+    """Latest 30 days of Finnhub company news. Requires FINNHUB_API_KEY env var."""
+    api_key = os.environ.get("FINNHUB_API_KEY", "")
+    if not api_key:
+        return pd.DataFrame()
+    end   = date.today()
+    start = end - timedelta(days=30)
+    url   = (
+        f"{_FINNHUB_URL}/company-news"
+        f"?symbol={ticker}&from={start}&to={end}&token={api_key}"
+    )
+    try:
+        req = Request(url=url, headers=_HEADERS)
+        articles = json.loads(urlopen(req, timeout=10).read().decode()) or []
+        rows = []
+        for a in articles:
+            ts = a.get("datetime", 0)
+            headline = (a.get("headline") or "").strip()
+            if ts and headline:
+                rows.append({
+                    "ticker":   ticker,
+                    "date":     datetime.fromtimestamp(ts).date(),
+                    "headline": headline,
+                    "source":   "finnhub",
+                })
+        return pd.DataFrame(rows)
+    except Exception as exc:
+        logger.warning("Finnhub live news failed for %s: %s", ticker, exc)
+        return pd.DataFrame()
+
+
 def _fetch_yfinance_news(ticker: str) -> pd.DataFrame:
     """Use yfinance's built-in news endpoint (~20 recent articles)."""
     try:
@@ -142,7 +177,7 @@ def fetch_all_news(
 
     frames = []
     for ticker in tickers:
-        for fn in (_fetch_finviz, _fetch_yahoo_rss, _fetch_yfinance_news):
+        for fn in (_fetch_finviz, _fetch_yahoo_rss, _fetch_yfinance_news, _fetch_finnhub_live):
             df = fn(ticker)
             if not df.empty:
                 frames.append(df)

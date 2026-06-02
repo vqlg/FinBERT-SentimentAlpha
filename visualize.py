@@ -15,7 +15,7 @@ def plot_dashboard(result: dict, benchmark=None, save_path: str = "dashboard.png
     m = result["metrics"]
 
     fig = plt.figure(figsize=(16, 13))
-    fig.suptitle("SentimentQuant — Performance Dashboard", fontsize=13, fontweight="bold", y=0.98)
+    fig.suptitle("FinBERT-SentimentAlpha — Performance Dashboard", fontsize=13, fontweight="bold", y=0.98)
     gs = gridspec.GridSpec(3, 2, figure=fig, hspace=0.45, wspace=0.32)
 
     # -- Panel 1: Cumulative value --
@@ -92,7 +92,7 @@ def plot_dashboard(result: dict, benchmark=None, save_path: str = "dashboard.png
 def plot_live_signals(signals_df: pd.DataFrame, scored_news: pd.DataFrame, save_path: str = "live_signals.png"):
     """Bar chart of current signals + FinBERT score distribution per ticker."""
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
-    fig.suptitle("SentimentQuant — Live Signals", fontsize=12, fontweight="bold")
+    fig.suptitle("FinBERT-SentimentAlpha — Live Signals", fontsize=12, fontweight="bold")
 
     # Signal bars
     colors = ["#4CAF50" if v > 0 else "#EF5350" for v in signals_df["signal"]]
