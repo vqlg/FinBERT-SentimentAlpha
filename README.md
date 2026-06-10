@@ -1,4 +1,4 @@
-# SentimentQuant
+# FinBert-SentimentALPHA
 
 An NLP-driven quantitative finance model that generates long/short equity signals by blending FinBERT sentiment analysis with technical indicators. Supports both live signal generation and historical backtesting.
 
