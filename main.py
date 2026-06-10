@@ -22,7 +22,7 @@ from rich.table import Table
 
 from config import CFG
 from src.data.news import fetch_all_news
-from src.data.alphavantage_news import fetch_alphavantage_historical_news
+from src.data.edgar_news import fetch_edgar_historical_news
 from src.data.prices import fetch_prices, fetch_vix
 from src.data.insider import fetch_insider_sentiment, insider_to_daily_signal
 from src.nlp.sentiment import EnsembleSentimentScorer
@@ -284,15 +284,15 @@ def run_backtest_mode(tickers=None, start=None, end=None):
 
     # --- Sentiment source: GDELT historical news or synthetic fallback ---
     console.print(
-        f"[cyan]Fetching Alpha Vantage news for {len(active_tickers)} tickers "
+        f"[cyan]Fetching SEC EDGAR 8-K filings for {len(active_tickers)} tickers "
         f"({start} → {end})…\n"
-        "[dim]Cached quarters load instantly; new quarters take ~13s each.[/dim]"
+        "[dim]Cached filings load instantly; first run ~2 min.[/dim]"
     )
-    news_df = fetch_alphavantage_historical_news(active_tickers, start, end)
+    news_df = fetch_edgar_historical_news(active_tickers, start, end)
 
     if not news_df.empty:
         console.print(
-            f"[green]{len(news_df):,} headlines retrieved across "
+            f"[green]{len(news_df):,} 8-K filings retrieved across "
             f"{news_df['ticker'].nunique()} tickers."
         )
         console.print("[cyan]Scoring with FinBERT 75% + VADER 25%…")
@@ -307,7 +307,7 @@ def run_backtest_mode(tickers=None, start=None, end=None):
         )
     else:
         console.print(
-            "[yellow]Alpha Vantage returned no articles — falling back to "
+            "[yellow]EDGAR returned no filings — falling back to "
             "synthetic sentiment proxy."
         )
         daily_sentiment = _synthetic_daily_sentiment(prices)

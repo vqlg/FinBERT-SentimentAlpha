@@ -109,7 +109,7 @@ def build_signals(
     wide = (
         daily_sentiment.pivot(index="date", columns="ticker", values="raw_sentiment")
         .reindex(price_dates)
-        .ffill(limit=3)
+        .ffill()
     )
 
     # -- 2. EWMA smoothing --
